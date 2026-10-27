@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0a0a0d">
+<meta name="description" content="An audio story for lying down with your eyes closed.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Echo Path">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Echo Path</title>
+<style>
+  :root{
+    --bg:#0a0a0d;
+    --bg-2:#131318;
+    --ink:#e9e6df;
+    --ink-dim:#87837c;
+    --ember:#e3a857;
+    --teal:#3e6b64;
+    --line:rgba(233,230,223,0.09);
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overflow:hidden; touch-action:manipulation; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;
+  }
+  button, select, input{font:inherit; color:inherit;}
+  [hidden]{display:none !important;}
+
+  /* ---------- title ---------- */
+  #veil{
+    position:fixed; inset:0; z-index:50; background:var(--bg);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px;
+    padding:24px 16px; text-align:center; transition:opacity .7s ease;
+  }
+  #veil.gone{opacity:0; pointer-events:none;}
+  #veil h1{font-size:1.6rem; font-weight:500; letter-spacing:.04em; margin:0;}
+  #veil .tag{color:var(--ink-dim); font-size:.92rem; margin:0; max-width:300px; line-height:1.5;}
+  #veil ul{list-style:none; padding:0; margin:6px 0 0; color:var(--ink-dim); font-size:.8rem; line-height:1.9; max-width:320px;}
+  #veil ul b{color:var(--ink); font-weight:500;}
+  .btnRow{display:flex; flex-direction:column; gap:10px; margin-top:12px; width:min(260px,100%);}
+  .primary{padding:14px 28px; border-radius:30px; border:none; background:var(--ember); color:#1a1408; font-weight:600; letter-spacing:.02em;}
+  .secondary{padding:13px 28px; border-radius:30px; background:transparent; border:1px solid var(--line);}
+  #titleCount{color:var(--ember); font-size:.75rem; letter-spacing:.06em; min-height:1em; margin:0;}
+
+  /* ---------- stage ---------- */
+  #stage{
+    position:fixed; inset:0;
+    display:flex; flex-direction:column; align-items:center; justify-content:space-between;
+    padding:max(env(safe-area-inset-top),16px) 16px max(env(safe-area-inset-bottom),20px);
+  }
+  .zone{position:absolute; top:0; bottom:0; width:50%; pointer-events:none; opacity:0;}
+  #zoneA{left:0; background:linear-gradient(90deg, rgba(227,168,87,.16), transparent);}
+  #zoneB{right:0; background:linear-gradient(270deg, rgba(227,168,87,.16), transparent);}
+  .zone.flash{animation:flash .7s ease-out;}
+  @keyframes flash{0%{opacity:1} 100%{opacity:0}}
+
+  .top{position:relative; z-index:5; width:100%; display:flex; justify-content:space-between; align-items:center; color:var(--ink-dim); font-size:.72rem; letter-spacing:.05em;}
+  .top .btns{display:flex; gap:6px; align-items:center;}
+  .iconBtn{width:38px; height:38px; border-radius:50%; background:transparent; border:1px solid var(--line); color:var(--ink-dim); font-size:.8rem; display:grid; place-items:center;}
+  #foundCount{margin-right:6px;}
+  .dot{width:6px; height:6px; border-radius:50%; background:var(--teal); display:inline-block; margin-right:6px; vertical-align:1px;}
+  .dot.live{background:var(--ember); box-shadow:0 0 8px var(--ember);}
+
+  #orbWrap{flex:1; display:flex; align-items:center; justify-content:center; min-height:120px;}
+  #orb{
+    width:140px; height:140px; border-radius:50%; position:relative;
+    background:radial-gradient(circle at 35% 30%, #2c261c, #0a0a0d 70%);
+    border:1px solid var(--line); transition:box-shadow .3s ease;
+  }
+  #orb::after{
+    content:''; position:absolute; inset:-1px; border-radius:50%;
+    border:1px solid rgba(227,168,87,.25); animation:breathe 4.5s ease-in-out infinite;
+  }
+  @keyframes breathe{0%,100%{transform:scale(1); opacity:.5} 50%{transform:scale(1.12); opacity:.9}}
+  #orb.talking{box-shadow:0 0 44px rgba(227,168,87,.2);}
+  .paused #orb::after{animation-play-state:paused;}
+
+  #captionBox{width:100%; max-width:440px; max-height:38vh; overflow-y:auto; text-align:center;}
+  #caption{font-size:1rem; line-height:1.6; margin:0;}
+  .nocaptions #caption{display:none;}
+  #endPanel{margin-top:14px;}
+  #endPanel .k{color:var(--ink-dim); font-size:.68rem; letter-spacing:.12em; text-transform:uppercase;}
+  #endTitle{color:var(--ember); font-size:1.25rem; margin:4px 0;}
+  #endCount{color:var(--ink-dim); font-size:.8rem;}
+
+  #choices{width:100%; max-width:520px; display:flex; gap:12px; min-height:76px; margin-top:16px;}
+  .card{
+    flex:1; padding:14px 12px; border-radius:16px; background:var(--bg-2); border:1px solid var(--line);
+    font-size:.92rem; line-height:1.35; text-align:center; opacity:0; transition:opacity .35s ease;
+  }
+  .card .k{display:block; color:var(--ink-dim); font-size:.66rem; margin-bottom:4px; letter-spacing:.06em;}
+  .choosing .card{opacity:1;}
+  #hint{color:var(--ink-dim); font-size:.72rem; text-align:center; min-height:1em; margin-top:10px;}
+
+  /* dark screen: just black, still tappable */
+  .dim #orbWrap, .dim #captionBox, .dim #choices, .dim #hint, .dim .zone{visibility:hidden;}
+  .dim .top{opacity:.18;}
+
+  /* ---------- settings ---------- */
+  .sheet{
+    position:fixed; inset:0; z-index:40; background:rgba(5,5,7,.86);
+    display:flex; align-items:flex-end; justify-content:center;
+  }
+  .sheet .panel{
+    width:100%; max-width:440px; background:var(--bg-2); border:1px solid var(--line); border-bottom:none;
+    border-radius:20px 20px 0 0; padding:20px 16px max(env(safe-area-inset-bottom),20px);
+    display:flex; flex-direction:column; gap:14px;
+  }
+  .sheet h2{font-size:1rem; font-weight:500; margin:0;}
+  .sheet label{display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:.88rem;}
+  .sheet select{max-width:60%; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:8px;}
+  .sheet input[type=range]{width:50%; accent-color:var(--ember);}
+  .sheet input[type=checkbox]{width:20px; height:20px; accent-color:var(--ember);}
+  .sheet .row{display:flex; gap:10px;}
+  .sheet .row button{flex:1;}
+  .sheet .danger{color:#d98a7a;}
+  .sheet .note{color:var(--ink-dim); font-size:.74rem; line-height:1.5; margin:0;}
+</style>
+</head>
+<body>
+
+<div id="veil">
+  <h1>Echo Path</h1>
+  <p class="tag">An audio story. Headphones on, lie down, close your eyes. The voice will do the rest.</p>
+  <ul>
+    <li>Two soft tones mean <b>a choice is waiting</b></li>
+    <li>Tap the <b>left</b> or <b>right</b> half of the screen</li>
+    <li><b>Hold</b> anywhere to hear the passage again</li>
+    <li>Headphone <b>skip back / forward</b> may choose too</li>
+  </ul>
+  <div class="btnRow">
+    <button class="primary" id="beginBtn">Begin, sound on</button>
+    <button class="secondary" id="continueBtn" hidden>Continue where I left off</button>
+  </div>
+  <p id="titleCount"></p>
+</div>
+
+<div id="stage">
+  <div class="zone" id="zoneA"></div>
+  <div class="zone" id="zoneB"></div>
+
+  <div class="top ui">
+    <span><span class="dot" id="liveDot"></span><span id="statusText">standby</span></span>
+    <span class="btns">
+      <span id="foundCount" title="Endings found"></span>
+      <button class="iconBtn" id="pauseBtn" aria-label="Pause">❚❚</button>
+      <button class="iconBtn" id="dimBtn" aria-label="Dark screen">☾</button>
+      <button class="iconBtn" id="menuBtn" aria-label="Settings">⋯</button>
+    </span>
+  </div>
+
+  <div id="orbWrap"><div id="orb"></div></div>
+
+  <div id="captionBox">
+    <p id="caption"></p>
+    <div id="endPanel" hidden>
+      <div class="k">Ending</div>
+      <div id="endTitle"></div>
+      <div id="endCount"></div>
+    </div>
+  </div>
+
+  <div id="choices">
+    <div class="card"><span class="k">◀ tap left</span><span id="labelA"></span></div>
+    <div class="card"><span class="k">tap right ▶</span><span id="labelB"></span></div>
+  </div>
+  <div id="hint"></div>
+</div>
+
+<div class="sheet ui" id="settings" hidden>
+  <div class="panel">
+    <h2>Settings</h2>
+    <label>Voice <select id="voiceSel"></select></label>
+    <label>Speed
+      <select id="rateSel">
+        <option value="0.85">Slow</option>
+        <option value="1">Normal</option>
+        <option value="1.15">Fast</option>
+      </select>
+    </label>
+    <label>Ambience volume <input type="range" id="ambRange" min="0" max="2" step="0.1"></label>
+    <label>Captions <input type="checkbox" id="capChk"></label>
+    <p class="note">Keys on desktop: ← → choose, space pauses, R repeats. Keep the screen on (☾ blacks it out) — most phones stop speech when locked.</p>
+    <div class="row">
+      <button class="secondary" id="restartBtn">Restart story</button>
+      <button class="secondary danger" id="resetBtn">Reset progress</button>
+    </div>
+    <button class="primary" id="closeSettings">Done</button>
+  </div>
+</div>
+
+<script src="story.js"></script>
+<script src="engine.js"></script>
+</body>
+</html>
