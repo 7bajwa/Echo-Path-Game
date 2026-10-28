@@ -60,10 +60,21 @@
   .zone.flash{animation:flash .7s ease-out;}
   @keyframes flash{0%{opacity:1} 100%{opacity:0}}
 
-  .top{position:relative; z-index:5; width:100%; display:flex; justify-content:space-between; align-items:center; color:var(--ink-dim); font-size:.72rem; letter-spacing:.05em;}
-  .top .btns{display:flex; gap:6px; align-items:center;}
-  .iconBtn{width:38px; height:38px; border-radius:50%; background:transparent; border:1px solid var(--line); color:var(--ink-dim); font-size:.8rem; display:grid; place-items:center;}
-  #foundCount{margin-right:6px;}
+  .controls{position:relative; z-index:5; width:100%; max-width:480px; display:flex; justify-content:space-between; gap:4px;}
+  .ctl{
+    flex:1; display:flex; flex-direction:column; align-items:center; gap:6px; padding:0;
+    background:none; border:none; color:var(--ink-dim); font-size:.72rem; letter-spacing:.04em;
+  }
+  .ctl .ring{
+    width:58px; height:58px; border-radius:50%; border:1px solid var(--line); background:var(--bg-2);
+    display:grid; place-items:center; transition:border-color .2s ease, color .2s ease;
+  }
+  .ctl svg{width:26px; height:26px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round;}
+  .ctl:active .ring{border-color:var(--ember); color:var(--ember);}
+  .ctl .i-play, .paused .ctl .i-pause{display:none;}
+  .paused .ctl .i-play{display:block;}
+  .paused #pauseBtn .ring{border-color:var(--ember); color:var(--ember);}
+  .status{position:relative; z-index:5; margin-top:12px; color:var(--ink-dim); font-size:.72rem; letter-spacing:.05em;}
   .dot{width:6px; height:6px; border-radius:50%; background:var(--teal); display:inline-block; margin-right:6px; vertical-align:1px;}
   .dot.live{background:var(--ember); box-shadow:0 0 8px var(--ember);}
 
@@ -100,7 +111,7 @@
 
   /* dark screen: just black, still tappable */
   .dim #orbWrap, .dim #captionBox, .dim #choices, .dim #hint, .dim .zone{visibility:hidden;}
-  .dim .top{opacity:.18;}
+  .dim .controls, .dim .status{opacity:.25;}
 
   /* ---------- settings ---------- */
   .sheet{
@@ -132,7 +143,7 @@
     <li>Two soft tones mean <b>a choice is waiting</b></li>
     <li>Tap the <b>left</b> or <b>right</b> half of the screen</li>
     <li><b>Hold</b> anywhere to hear the passage again</li>
-    <li>Headphone <b>skip back / forward</b> may choose too</li>
+    <li>Screen locked? Headphone <b>skip back / forward</b> choose</li>
   </ul>
   <div class="btnRow">
     <button class="primary" id="beginBtn">Begin, sound on</button>
@@ -145,15 +156,25 @@
   <div class="zone" id="zoneA"></div>
   <div class="zone" id="zoneB"></div>
 
-  <div class="top ui">
-    <span><span class="dot" id="liveDot"></span><span id="statusText">standby</span></span>
-    <span class="btns">
-      <span id="foundCount" title="Endings found"></span>
-      <button class="iconBtn" id="pauseBtn" aria-label="Pause">❚❚</button>
-      <button class="iconBtn" id="dimBtn" aria-label="Dark screen">☾</button>
-      <button class="iconBtn" id="menuBtn" aria-label="Settings">⋯</button>
-    </span>
+  <div class="controls ui">
+    <button class="ctl" id="pauseBtn"><span class="ring">
+      <svg class="i-pause" viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></svg>
+      <svg class="i-play" viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z"/></svg>
+    </span><span id="pauseLabel">Pause</span></button>
+    <button class="ctl" id="repeatBtn"><span class="ring">
+      <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7L4 8.5M4 4v4.5h4.5"/></svg>
+    </span><span>Repeat</span></button>
+    <button class="ctl" id="dimBtn"><span class="ring">
+      <svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg>
+    </span><span>Dark</span></button>
+    <button class="ctl" id="menuBtn"><span class="ring">
+      <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+    </span><span>Settings</span></button>
+    <button class="ctl" id="exitBtn"><span class="ring">
+      <svg viewBox="0 0 24 24"><path d="M13 4h6v16h-6M15 12H4M8 8l-4 4 4 4"/></svg>
+    </span><span>Exit</span></button>
   </div>
+  <div class="status ui"><span class="dot" id="liveDot"></span><span id="statusText">standby</span> · <span id="foundCount" title="Endings found"></span> endings</div>
 
   <div id="orbWrap"><div id="orb"></div></div>
 
@@ -176,7 +197,8 @@
 <div class="sheet ui" id="settings" hidden>
   <div class="panel">
     <h2>Settings</h2>
-    <label>Voice <select id="voiceSel"></select></label>
+    <label>Narrator <select id="narratorSel"></select></label>
+    <label id="deviceVoiceRow">Device voice <select id="voiceSel"></select></label>
     <label>Speed
       <select id="rateSel">
         <option value="0.85">Slow</option>
@@ -186,7 +208,7 @@
     </label>
     <label>Ambience volume <input type="range" id="ambRange" min="0" max="2" step="0.1"></label>
     <label>Captions <input type="checkbox" id="capChk"></label>
-    <p class="note">Keys on desktop: ← → choose, space pauses, R repeats. Keep the screen on (☾ blacks it out) — most phones stop speech when locked.</p>
+    <p class="note">George and Emma are recorded, so they keep playing with the screen locked: use your headphone buttons to choose. The device voice stops when the screen locks. Desktop keys: ← → choose, space pauses, R repeats.</p>
     <div class="row">
       <button class="secondary" id="restartBtn">Restart story</button>
       <button class="secondary danger" id="resetBtn">Reset progress</button>
@@ -195,6 +217,7 @@
   </div>
 </div>
 
+<script src="text.js"></script>
 <script src="story.js"></script>
 <script src="engine.js"></script>
 </body>

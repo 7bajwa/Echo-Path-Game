@@ -28,6 +28,15 @@ const IDLE = [
   "Still with me? Tap the left side or the right side. Or the skip buttons on your headphones, if they're the cooperative kind.",
 ];
 
+// Lines the engine speaks around endings and choices.
+const LINES = {
+  or: 'or',
+  ending: title => `Ending: ${title}.`,
+  count: (n, total) => `That's ${n} of ${total}.`,
+  again: "You've found this one before.",
+  restart: 'Tap either side, or press a headphone button, to begin again.',
+};
+
 // Three defiant choices in one run and the narrator walks out.
 const defied = id => s => (s.defy >= 3 ? 'argument' : id);
 const echoUnlocked = m => m.found >= 4 && !m.endings.echo;

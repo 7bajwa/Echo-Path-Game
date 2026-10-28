@@ -18,7 +18,7 @@ const save = {
   endings: loaded.endings || {},
   runs: loaded.runs || 0,
   run: loaded.run || null,
-  settings: Object.assign({ rate: 1, captions: true, voice: '', ambience: 1 }, loaded.settings),
+  settings: Object.assign({ rate: 1, captions: true, voice: '', ambience: 1, narrator: 'bm_george' }, loaded.settings),
 };
 
 /* ---------------- Sound: procedural ambient beds + cues ---------------- */
@@ -164,29 +164,36 @@ const BEDS = {
   silence() {},
 };
 
-/* ---------------- Speech: sentence queue with cues and pauses ---------------- */
-// Chrome cuts utterances after ~15s, and Android's speechSynthesis.pause() cancels,
-// so text is spoken one sentence at a time and pause/resume replays the current part.
-function sentences(text) {
-  const out = [];
-  (text.match(/[^.!?]+[.!?]+["'”’)]*|[^.!?]+$/g) || []).forEach(s => {
-    s = s.trim();
-    while (s.length > 200) {
-      let cut = s.lastIndexOf(', ', 200);
-      if (cut < 60) cut = s.lastIndexOf(' ', 200);
-      out.push(s.slice(0, cut + 1));
-      s = s.slice(cut + 1).trim();
-    }
-    if (s) out.push(s);
-  });
-  return out;
-}
-
+/* ---------------- Narration: recorded clips, device voice as fallback ---------------- */
+// Recorded clips (audio/<voice>/, made by tools/render.py) play in an <audio> element, which
+// keeps going with the screen locked. Lines without a clip use speechSynthesis, one sentence
+// at a time (see sentences() in text.js); Android's speechSynthesis.pause() cancels, so
+// pause/resume replays the current sentence there.
+const VOICE_PACKS = [
+  { id: 'bm_george', name: 'George, male' },
+  { id: 'bf_emma', name: 'Emma, female' },
+];
 const PREFERRED_VOICES = [/Daniel/i, /Google UK English Male/i, /Ryan.*Natural/i, /Thomas/i, /Arthur/i, /Oliver/i, /en[-_]GB/i, /en[-_](AU|IE)/i, /en[-_]US/i, /^en/i];
 
 const Speech = {
   ok: 'speechSynthesis' in window,
   voice: null, parts: [], i: 0, token: 0, done: null, paused: false, timer: null, utter: null,
+  pack: null, clips: new Set(), narr: new Audio(), pre: new Audio(), clipOn: false,
+
+  async loadPack(id) {
+    this.pack = null; this.clips = new Set();
+    if (id === 'device') return;
+    try {
+      const r = await fetch(`audio/${id}/index.json`);
+      if (r.ok) { this.clips = new Set(await r.json()); this.pack = id; }
+    } catch (e) { /* offline or not rendered: device voice */ }
+  },
+  clipUrl(key) {
+    const id = clipId(key);
+    return this.pack && this.clips.has(id) ? `audio/${this.pack}/${id}.mp3` : null;
+  },
+  // The first play() must happen inside a tap for iOS to allow this element later.
+  unlock(src) { this.narr.src = src; this.narr.play().catch(() => {}); },
 
   voices() {
     return this.ok ? speechSynthesis.getVoices().filter(v => /^en/i.test(v.lang)) : [];
@@ -199,7 +206,8 @@ const Speech = {
     UI.voiceList(vs, this.voice);
   },
 
-  // parts: strings (spoken), numbers (ms pause), functions (run instantly, e.g. a cue).
+  // parts: strings (a line), { choices: [labelA, labelB] }, { tts: sentence },
+  // numbers (ms pause), functions (run instantly, e.g. open the choices).
   play(parts, done) {
     this.cancel();
     this.parts = parts; this.i = 0; this.done = done || null; this.paused = false;
@@ -209,20 +217,22 @@ const Speech = {
     this.token++;
     clearTimeout(this.timer);
     if (this.ok) speechSynthesis.cancel();
+    this.narr.pause(); this.clipOn = false;
     this.parts = []; this.done = null; this.paused = false;
     UI.talking(false);
   },
   pause() {
     if (this.paused || !this.parts.length) return;
-    this.paused = true; this.token++;
+    this.paused = true;
     clearTimeout(this.timer);
-    if (this.ok) speechSynthesis.cancel();
+    if (this.clipOn) this.narr.pause();
+    else { this.token++; if (this.ok) speechSynthesis.cancel(); }
     UI.talking(false);
   },
   resume() {
     if (!this.paused) return;
     this.paused = false;
-    this.step();
+    if (this.clipOn) { this.narr.play().catch(() => {}); UI.talking(true); } else this.step();
   },
   step() {
     const tok = ++this.token;
@@ -237,7 +247,35 @@ const Speech = {
     const p = this.parts[this.i];
     if (typeof p === 'function') { p(); next(); return; }
     if (typeof p === 'number') { this.timer = setTimeout(next, p); return; }
-    this.say(p, next);
+    if (p.tts) { this.say(p.tts, next); return; }
+    const key = typeof p === 'string' ? p : choiceKey(p.choices);
+    const url = this.clipUrl(key);
+    if (url) { this.playClip(url, key, tok, next); return; }
+    // No recording for this line: expand it into device-voice parts in place.
+    if (this.pack) console.warn('Echo Path: no clip for', key);
+    this.parts.splice(this.i, 1, ...(typeof p === 'string'
+      ? [...sentences(p).map(s => ({ tts: s })), 600]
+      : [() => Sound.cue(-1), 250, { tts: p.choices[0] + '.' }, { tts: LINES.or }, () => Sound.cue(1), 250, { tts: p.choices[1] + '.' }]));
+    this.step();
+  },
+  playClip(url, key, tok, next) {
+    const el = this.narr;
+    el.onended = () => { if (tok !== this.token) return; this.clipOn = false; next(); };
+    el.onerror = () => { // broken or missing file: retry this part with the device voice
+      if (tok !== this.token) return;
+      this.clipOn = false;
+      this.clips.delete(clipId(key));
+      this.step();
+    };
+    el.src = url;
+    el.defaultPlaybackRate = el.playbackRate = save.settings.rate;
+    this.clipOn = true;
+    UI.talking(true);
+    el.play().catch(() => {});
+    // Warm the cache for the next recorded part so clips run back to back.
+    const nextPart = this.parts.slice(this.i + 1).find(q => typeof q === 'string' || (q && q.choices));
+    const nextUrl = nextPart && this.clipUrl(typeof nextPart === 'string' ? nextPart : choiceKey(nextPart.choices));
+    if (nextUrl) { this.pre.preload = 'auto'; this.pre.src = nextUrl; }
   },
   say(text, next) {
     const rate = save.settings.rate;
@@ -291,15 +329,10 @@ const Game = {
   },
 
   narrate() {
-    const parts = sentences(this.text);
-    if (this.node.ending) parts.push(1200, () => this.finish());
-    else parts.push(700, () => this.openChoices(), ...this.announce(), () => this.armIdle());
-    Speech.play(parts);
+    if (this.node.ending) Speech.play([this.text, () => this.finish()]);
+    else Speech.play([this.text, () => this.openChoices(), this.announce(), () => this.armIdle()]);
   },
-  announce() {
-    const [a, b] = this.options;
-    return [() => Sound.cue(-1), 250, a.label + '.', 'or', () => Sound.cue(1), 250, b.label + '.'];
-  },
+  announce() { return { choices: this.options.map(c => c.label) }; },
 
   openChoices() { this.choices = this.options; UI.choices(true); },
   closeChoices() { this.choices = null; clearTimeout(this.idleTimer); UI.choices(false); },
@@ -312,10 +345,11 @@ const Game = {
     if (!this.choices || this.paused) return;
     const n = this.idleCount++;
     if (n >= IDLE.length) { this.go('asleep'); return; }
-    Speech.play([IDLE[n], 500, ...this.announce(), () => this.armIdle()]);
+    Speech.play([IDLE[n], this.announce(), () => this.armIdle()]);
   },
 
   tap(side) {
+    if (!this.node) return;
     if (this.ended) {
       if (Date.now() - this.endedAt > 1500) { Speech.cancel(); Awake.request(); this.newRun(); }
       return;
@@ -371,13 +405,20 @@ const Game = {
     UI.ending(ENDINGS[id], m);
     if (this.node.silent) { Awake.release(); return; } // the player fell asleep: let the phone sleep too
     Sound.chord();
-    Speech.play([
-      1500,
-      `Ending: ${ENDINGS[id]}.`,
-      first ? `That's ${m.found} of ${m.total}.` : "You've found this one before.",
-      1500,
-      'Tap either side to begin again.',
-    ]);
+    Speech.play([1000, LINES.ending(ENDINGS[id]), first ? LINES.count(m.found, m.total) : LINES.again, LINES.restart]);
+  },
+
+  // Back to the title screen. The run is already saved at the current passage.
+  exit() {
+    if (!this.node) return;
+    if (this.paused) this.setPaused(false);
+    Speech.cancel();
+    this.closeChoices();
+    Sound.scene('silence', 0.6);
+    Media.pause();
+    Awake.release();
+    this.node = null; this.ended = false;
+    UI.title();
   },
 };
 
@@ -398,6 +439,7 @@ function silentWavUrl(seconds) {
 const Media = {
   el: null,
   start() {
+    if (this.el) { this.play(); return; }
     if (navigator.audioSession) navigator.audioSession.type = 'playback'; // iOS 17+: ignore the silent switch
     this.el = new Audio(silentWavUrl(10));
     this.el.loop = true;
@@ -469,8 +511,7 @@ const UI = {
   paused(p) {
     document.body.classList.toggle('paused', p);
     $('statusText').textContent = p ? 'paused' : 'listening';
-    $('pauseBtn').textContent = p ? '▶' : '❚❚';
-    $('pauseBtn').setAttribute('aria-label', p ? 'Resume' : 'Pause');
+    $('pauseLabel').textContent = p ? 'Play' : 'Pause';
   },
   hint(t) { $('hint').textContent = t; },
   flash(side) {
@@ -490,6 +531,20 @@ const UI = {
     $('titleCount').textContent = m.found ? `${m.found} of ${m.total} endings found` : '';
   },
   captions(on) { document.body.classList.toggle('nocaptions', !on); },
+  title() {
+    document.body.classList.remove('dim', 'choosing');
+    $('settings').hidden = true;
+    $('continueBtn').hidden = !(save.run && STORY[save.run.node]);
+    this.counts();
+    $('veil').classList.remove('gone');
+  },
+  narrators() {
+    const sel = $('narratorSel');
+    VOICE_PACKS.forEach(v => sel.add(new Option(v.name, v.id)));
+    sel.add(new Option('Device voice (robotic)', 'device'));
+    sel.value = save.settings.narrator;
+    $('deviceVoiceRow').hidden = save.settings.narrator !== 'device';
+  },
   voiceList(vs, current) {
     const sel = $('voiceSel');
     sel.innerHTML = '';
@@ -527,7 +582,9 @@ window.addEventListener('keydown', e => {
 
 $('pauseBtn').addEventListener('click', () => Game.setPaused(!Game.paused));
 $('dimBtn').addEventListener('click', () => document.body.classList.toggle('dim'));
+$('repeatBtn').addEventListener('click', () => Game.repeat());
 $('menuBtn').addEventListener('click', () => { $('settings').hidden = false; });
+$('exitBtn').addEventListener('click', () => Game.exit());
 $('closeSettings').addEventListener('click', () => { $('settings').hidden = true; });
 
 /* ---------------- Settings ---------------- */
@@ -538,7 +595,19 @@ function bindSettings() {
   $('capChk').checked = st.captions;
   UI.captions(st.captions);
 
-  $('rateSel').addEventListener('change', e => { st.rate = Number(e.target.value); writeSave(); });
+  UI.narrators();
+
+  $('rateSel').addEventListener('change', e => {
+    st.rate = Number(e.target.value);
+    Speech.narr.playbackRate = st.rate;
+    writeSave();
+  });
+  $('narratorSel').addEventListener('change', e => {
+    st.narrator = e.target.value;
+    $('deviceVoiceRow').hidden = st.narrator !== 'device';
+    writeSave();
+    Speech.loadPack(st.narrator); // takes effect from the next line
+  });
   $('ambRange').addEventListener('input', e => { st.ambience = Number(e.target.value); Sound.volume(st.ambience); writeSave(); });
   $('capChk').addEventListener('change', e => { st.captions = e.target.checked; UI.captions(st.captions); writeSave(); });
   $('voiceSel').addEventListener('change', e => { st.voice = e.target.value; writeSave(); Speech.pickVoice(); });
@@ -561,9 +630,10 @@ function begin(resume) {
   Sound.init();
   Sound.resume();
   Media.start();
+  Speech.unlock(Media.el.src);
   Awake.request();
   $('veil').classList.add('gone');
-  // First utterance must start inside this tap for iOS to allow speech at all.
+  // First line must start inside this tap for iOS to allow audio and speech at all.
   if (resume) Game.continueRun(); else Game.newRun();
 }
 
@@ -573,6 +643,7 @@ $('continueBtn').hidden = !(save.run && STORY[save.run.node]);
 
 bindSettings();
 UI.counts();
+Speech.loadPack(save.settings.narrator);
 if (Speech.ok) {
   Speech.pickVoice();
   speechSynthesis.addEventListener ? speechSynthesis.addEventListener('voiceschanged', () => Speech.pickVoice())
